@@ -74,7 +74,7 @@ class GithubWebhookListener():
 
         self.__dispatch_event(request)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def __dispatch_event(self, request):
         try:
             event = request.headers['X-Github-Event']
@@ -122,7 +122,7 @@ class GithubWebhookListener():
             self.log.debug('Scheduling github event: {0}'.format(event.type))
             self.connection.sched.addEvent(event)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _event_push(self, body):
         base_repo = body.get('repository')
 
@@ -149,7 +149,7 @@ class GithubWebhookListener():
 
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _event_pull_request(self, body):
         action = body.get('action')
         pr_body = body.get('pull_request')
@@ -176,7 +176,7 @@ class GithubWebhookListener():
 
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _event_issue_comment(self, body):
         """Handles pull request comments"""
         action = body.get('action')
@@ -192,7 +192,7 @@ class GithubWebhookListener():
         event.type = 'pr-comment'
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _event_pull_request_review(self, body):
         """Handles pull request reviews"""
         action = body.get('action')
@@ -212,7 +212,7 @@ class GithubWebhookListener():
         event.type = 'pr-review'
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _event_status(self, body):
         action = body.get('action')
         if action == 'pending':
@@ -231,7 +231,7 @@ class GithubWebhookListener():
         event.event_status = "%s:%s:%s" % self._status_as_tuple(body)
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _issue_to_pull_request(self, body):
         number = body.get('issue').get('number')
         project_name = body.get('repository').get('full_name')
@@ -242,7 +242,7 @@ class GithubWebhookListener():
                            (number, project_name))
         return pr_body
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT),
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True,
            retry=retry_if_exception_type(KeyError))
     def _validate_signature(self, request):
         secret = self.connection.connection_config.get('webhook_token', None)
@@ -269,7 +269,7 @@ class GithubWebhookListener():
 
         return True
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _pull_request_to_event(self, pr_body):
         event = GithubTriggerEvent()
         event.connection_name = self.connection.connection_name
@@ -296,7 +296,7 @@ class GithubWebhookListener():
 
         return event
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _get_statuses(self, owner, project, sha):
         # A ref can have more than one status from each context,
         # however the API returns them in order, newest first.
@@ -329,7 +329,7 @@ class GithubWebhookListener():
         state = status.get('state')
         return (user, context, state)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _get_sender(self, body):
         login = body.get('sender').get('login')
         if login:
@@ -403,7 +403,7 @@ class GithubConnection(BaseConnection):
     def onStop(self):
         self.unregisterHttpHandler(self.payload_path)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def _createGithubClient(self):
         if self.git_host != 'github.com':
             url = 'https://%s/' % self.git_host
@@ -417,7 +417,7 @@ class GithubConnection(BaseConnection):
 
         return github
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT),
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True,
            retry=retry_if_exception_type(IOError))
     def _authenticateGithubAPI(self):
         config = self.connection_config
@@ -517,7 +517,7 @@ class GithubConnection(BaseConnection):
             if change not in relevant:
                 del self._change_cache[key]
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getGitUrl(self, project):
         if self.integration_id:
             installation_key = self._get_installation_key(project)
@@ -531,18 +531,18 @@ class GithubConnection(BaseConnection):
 
         return 'https://%s/%s' % (self.git_host, project)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getGitwebUrl(self, project, sha=None):
         url = 'https://%s/%s' % (self.git_host, project)
         if sha is not None:
             url += '/commit/%s' % sha
         return url
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getPullUrl(self, project, number):
         return '%s/pull/%s' % (self.getGitwebUrl(project), number)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getPull(self, owner, project, number):
         github = self.getGithubClient("%s/%s" % (owner, project))
         pr = github.pull_request(owner, project, number)
@@ -551,7 +551,7 @@ class GithubConnection(BaseConnection):
             return None
         return pr.as_dict()
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getPullBySha(self, sha):
         query = '%s type:pr is:open' % sha
         pulls = []
@@ -578,7 +578,7 @@ class GithubConnection(BaseConnection):
             return None
         return pulls.pop()
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getPullFileNames(self, owner, project, number):
         github = self.getGithubClient("%s/%s" % (owner, project))
         filenames = [f.filename for f in
@@ -586,7 +586,7 @@ class GithubConnection(BaseConnection):
         log_rate_limit(self.log, github)
         return filenames
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getPullReviews(self, owner, project, number):
         # make a list out of the reviews so that we complete our
         # API transaction
@@ -599,15 +599,15 @@ class GithubConnection(BaseConnection):
         log_rate_limit(self.log, github)
         return reviews
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getUser(self, login):
         return GithubUser(self.getGithubClient(), login)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getUserUri(self, login):
         return 'https://%s/%s' % (self.git_host, login)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getRepoPermission(self, owner, project, login):
         # This gets around a missing API call
         # need preview header
@@ -631,14 +631,14 @@ class GithubConnection(BaseConnection):
         # get permissions from the data
         return perms.json()['permission']
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def commentPull(self, owner, project, pr_number, message):
         github = self.getGithubClient("%s/%s" % (owner, project))
         pull_request = github.issue(owner, project, pr_number)
         pull_request.create_comment(message)
         log_rate_limit(self.log, github)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def mergePull(self, owner, project, pr_number, commit_message='',
                   sha=None):
         github = self.getGithubClient("%s/%s" % (owner, project))
@@ -652,7 +652,7 @@ class GithubConnection(BaseConnection):
         if not result:
             raise Exception('Pull request was not merged')
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def getCommitStatuses(self, owner, project, sha):
         github = self.getGithubClient("%s/%s" % (owner, project))
         repository = github.repository(owner, project)
@@ -664,7 +664,7 @@ class GithubConnection(BaseConnection):
         log_rate_limit(self.log, github)
         return statuses
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def setCommitStatus(self, owner, project, sha, state,
                         url='', description='', context=''):
         github = self.getGithubClient("%s/%s" % (owner, project))
@@ -676,14 +676,14 @@ class GithubConnection(BaseConnection):
         repository.create_status(sha, state, url, description, context)
         log_rate_limit(self.log, github)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def labelPull(self, owner, project, pr_number, label):
         github = self.getGithubClient("%s/%s" % (owner, project))
         pull_request = github.issue(owner, project, pr_number)
         pull_request.add_labels(label)
         log_rate_limit(self.log, github)
 
-    @retry(stop=stop_after_attempt(RETRY_LIMIT))
+    @retry(stop=stop_after_attempt(RETRY_LIMIT), reraise=True)
     def unlabelPull(self, owner, project, pr_number, label):
         github = self.getGithubClient("%s/%s" % (owner, project))
         pull_request = github.issue(owner, project, pr_number)
