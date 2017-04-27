@@ -20,6 +20,7 @@ import hashlib
 
 import cachecontrol
 from cachecontrol.cache import DictCache
+from cachecontrol.heuristics import BaseHeuristic
 import iso8601
 import jwt
 import requests
@@ -366,6 +367,25 @@ class GithubUser(collections.Mapping):
         return data
 
 
+class DropMaxAgeHeaders(BaseHeuristic):
+    """CacheControl will prioritize the max-age headers from our github
+    responses over the ETag, causing all caching to be time-based and only
+    refresh every 60 seconds.  Stripping them out here forces the library
+    to use the ETag headers and a conditional request when determining
+    freshness of existing cache entries.
+    """
+    def update_headers(self, response):
+        cc_header = response.headers.get('cache-control')
+        if not cc_header:
+            return {}
+        cc_new_header = []
+        for cc in cc_header.split(','):
+            cc = cc.strip()
+            if not cc.startswith('max-age') and not cc.startswith('s-maxage'):
+                cc_new_header.append(cc)
+        return {'cache-control': ', '.join(cc_new_header)}
+
+
 class GithubConnection(BaseConnection):
     driver_name = 'github'
     log = logging.getLogger("zuul.GithubConnection")
@@ -386,7 +406,8 @@ class GithubConnection(BaseConnection):
         # memory probably doesn't make this much worse.
         self.cache_adapter = cachecontrol.CacheControlAdapter(
             DictCache(),
-            cache_etags=True)
+            cache_etags=True,
+            heuristic=DropMaxAgeHeaders())
 
         self.integration_id = None
         self.integration_key = None
