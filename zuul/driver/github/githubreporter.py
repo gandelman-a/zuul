@@ -16,6 +16,7 @@ import logging
 import voluptuous as v
 import time
 
+from zuul.driver.github import githubsource
 from zuul.reporter import BaseReporter
 from zuul.exceptions import MergeFailure
 
@@ -38,8 +39,10 @@ class GithubReporter(BaseReporter):
         if not isinstance(self._unlabels, list):
             self._unlabels = [self._unlabels]
 
-    def report(self, source, pipeline, item):
+    def report(self, pipeline, item):
         """Comment on PR and set commit status."""
+        if item.change.project.source.connection != self.connection:
+            return
         if self._create_comment:
             self.addPullComment(pipeline, item)
         if (self._commit_status is not None and
