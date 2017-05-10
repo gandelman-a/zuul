@@ -277,7 +277,6 @@ class PipelineManager(object):
                   ignore_requirements=False, live=True,
                   change_queue=None):
         self.log.debug("Considering adding change %s" % change)
-
         # If we are adding a live change, check if it's a live item
         # anywhere in the pipeline.  Otherwise, we will perform the
         # duplicate check below on the specific change_queue.

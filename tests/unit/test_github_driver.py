@@ -544,3 +544,42 @@ class TestGithubDriver(ZuulTestCase):
         self.assertNotIn('merge', A.labels)
         self.assertNotIn('merge', B.labels)
         self.assertNotIn('merge', C.labels)
+
+    @simple_layout('layouts/crd-github.yaml', driver='github')
+    def test_crd_github_check(self):
+        "Test cross-repo dependencies in independent pipeline"
+        A = self.fake_github.openFakePullRequest('org/project', 'master', 'A')
+        B = self.fake_github.openFakePullRequest('org/project1', 'master', 'B')
+        C = self.fake_github.openFakePullRequest('org/project2', 'master', 'C')
+
+        # B Depends-on: C
+        B.setDependsOn(C)
+
+        # A Depends-on: B
+        A.setDependsOn(B)
+
+        self.fake_github.emitEvent(A.getPullRequestOpenedEvent())
+        self.fake_github.emitEvent(B.getPullRequestOpenedEvent())
+        self.fake_github.emitEvent(C.getPullRequestOpenedEvent())
+
+        self.waitUntilSettled()
+        A_job = self.getJobFromHistory('project-test', 'org/project')
+        B_job = self.getJobFromHistory('project-test', 'org/project1')
+        C_job = self.getJobFromHistory('project-test', 'org/project2')
+
+        # merger items has the correct number of dependent items
+        self.assertEqual(len(A_job.parameters['items']), 3)
+        self.assertEqual(len(B_job.parameters['items']), 2)
+        self.assertEqual(len(C_job.parameters['items']), 1)
+
+        def _assert_zuul_changes(job, exp_changes):
+            changes = []
+            for p in exp_changes:
+                changes.append('%s:%s:refs/pull/%s/head' % (p.project, p.branch, p.number))
+            zuul_changes = '^'.join(changes)
+            self.assertEqual(
+                job.parameters['ZUUL_CHANGES'], zuul_changes)
+
+        _assert_zuul_changes(A_job, [C, B, A])
+        _assert_zuul_changes(B_job, [C, B])
+        _assert_zuul_changes(C_job, [C])

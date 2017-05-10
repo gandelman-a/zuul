@@ -18,6 +18,7 @@ import logging
 import hmac
 import hashlib
 import time
+import re
 
 import cachecontrol
 from cachecontrol.cache import DictCache
@@ -48,6 +49,18 @@ REVIEW_STATES = [
     REVIEW_COMMENTED,
 ]
 
+
+def status_as_tuple(self, status):
+    """Translate a status into a tuple of user, context, state"""
+
+    creator = status.get('creator')
+    if not creator:
+        user = "Unknown"
+    else:
+        user = creator.get('login')
+    context = status.get('context')
+    state = status.get('state')
+    return (user, context, state)
 
 class UTC(datetime.tzinfo):
     """UTC"""
@@ -234,7 +247,7 @@ class GithubWebhookListener():
         # 'sender', but API call to get status puts it in 'creator'.
         # Duplicate the data so our code can look in one place
         body['creator'] = body['sender']
-        event.event_status = "%s:%s:%s" % self._status_as_tuple(body)
+        event.event_status = "%s:%s:%s" % status_as_tuple(body)
         return event
 
     def _issue_to_pull_request(self, body):
@@ -297,34 +310,7 @@ class GithubWebhookListener():
         return event
 
     def _get_statuses(self, project, sha):
-        # A ref can have more than one status from each context,
-        # however the API returns them in order, newest first.
-        # So we can keep track of which contexts we've already seen
-        # and throw out the rest. Our unique key is based on
-        # the user and the context, since context is free form and anybody
-        # can put whatever they want there. We want to ensure we track it
-        # by user, so that we can require/trigger by user too.
-        seen = []
-        statuses = []
-        for status in self.connection.getCommitStatuses(project, sha):
-            stuple = self._status_as_tuple(status)
-            if "%s:%s" % (stuple[0], stuple[1]) not in seen:
-                statuses.append("%s:%s:%s" % stuple)
-                seen.append("%s:%s" % (stuple[0], stuple[1]))
-
-        return statuses
-
-    def _status_as_tuple(self, status):
-        """Translate a status into a tuple of user, context, state"""
-
-        creator = status.get('creator')
-        if not creator:
-            user = "Unknown"
-        else:
-            user = creator.get('login')
-        context = status.get('context')
-        state = status.get('state')
-        return (user, context, state)
+        return self.connection.getChangeStatuses(project, sha)
 
     def _get_sender(self, body):
         login = body.get('sender').get('login')
@@ -509,7 +495,53 @@ class GithubConnection(BaseConnection):
             if change not in relevant:
                 del self._change_cache[key]
 
+    def _getChangesNeeded(self, project, number):
+        depends_on_re = re.compile(r"^Depends-On: .*$",
+                                   re.MULTILINE | re.IGNORECASE)
+        pr_desc = self.getPullRequestDescription(project, number)
+        seen = set()
+        changes = []
+        # XXX TODO: RTFregexM again
+        for match in depends_on_re.findall(pr_desc):
+            c = match.split(' ')[1]
+            p, n = c.split('#')
+            n = int(n)
+            if (p, n) not in seen:
+                change = self._getChangeFromPR(p, n)
+                if change:
+                    changes.append(change)
+                seen.add((p, n))
+        return changes
+
+    def getPullRequestDescription(self, project, number):
+        return self.getPull(project, number)['body']
+
+    def _getChangeFromPR(self, project, number):
+        """Fetches a PR via the API and converts it to a change
+        This is called to create Change objects for Depends-on
+        changes, which do not get constructed from an event/getChange()
+        """
+        source_project = self.source.getProject(project)
+        pr = self.getPull(project, number)
+        if not pr:
+            return None
+        change = PullRequest(source_project)
+        change.number = pr['number']
+        change.refspec = 'refs/pull/%s/head' % change.number
+        change.branch = pr['base']['ref']
+        change.url = pr['url']
+        change.updated_at = self._ghTimestampToDate(pr['updated_at'])
+        change.patchset = pr['head']['sha']
+        change.files = self.getPullFileNames(project, number)
+        change.title = pr['title']
+        change.needs_changes = self._getChangesNeeded(project, number)
+        change.status = self.getChangeStatuses(project, pr['head']['sha'])
+        change.approvals = self.getPullReviews(source_project, number)
+        change.is_merged = pr['merged']
+        return change
+
     def getChange(self, event):
+
         """Get the change representing an event."""
 
         project = self.source.getProject(event.project_name)
@@ -524,6 +556,7 @@ class GithubConnection(BaseConnection):
             change.patchset = event.patch_number
             change.files = self.getPullFileNames(project, change.number)
             change.title = event.title
+            change.needs_changes = self._getChangesNeeded(project, change.number)
             change.status = event.statuses
             change.approvals = self.getPullReviews(project, change.number)
             change.source_event = event
@@ -619,13 +652,16 @@ class GithubConnection(BaseConnection):
             return None
         return pulls.pop()
 
+    def _getPullFileNames(self, pull_request):
+        return [f.filename for f in
+                pull_request.files()]
+
     def getPullFileNames(self, project, number):
         github = self.getGithubClient(project)
         owner, proj = project.name.split('/')
-        filenames = [f.filename for f in
-                     github.pull_request(owner, proj, number).files()]
+        fns = self._getPullFileNames(github.pull_request(owner, proj, number))
         log_rate_limit(self.log, github)
-        return filenames
+        return fns
 
     def getPullReviews(self, project, number):
         owner, proj = project.name.split('/')
@@ -755,6 +791,23 @@ class GithubConnection(BaseConnection):
         log_rate_limit(self.log, github)
         if not result:
             raise Exception('Pull request was not merged')
+
+    def getChangeStatuses(self, project, sha):
+        # A ref can have more than one status from each context,
+        # however the API returns them in order, newest first.
+        # So we can keep track of which contexts we've already seen
+        # and throw out the rest. Our unique key is based on
+        # the user and the context, since context is free form and anybody
+        # can put whatever they want there. We want to ensure we track it
+        # by user, so that we can require/trigger by user too.
+        seen = []
+        statuses = []
+        for status in self.getCommitStatuses(project, sha):
+            stuple = status_as_tuple(status)
+            if "%s:%s" % (stuple[0], stuple[1]) not in seen:
+                statuses.append("%s:%s:%s" % stuple)
+                seen.append("%s:%s" % (stuple[0], stuple[1]))
+        return statuses
 
     def getCommitStatuses(self, project, sha):
         github = self.getGithubClient(project)

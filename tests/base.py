@@ -550,7 +550,7 @@ class FakeGithubPullRequest(object):
 
     def __init__(self, github, number, project, branch,
                  subject, upstream_root, files=[], number_of_commits=1,
-                 writers=[]):
+                 writers=[], body=''):
         """Creates a new PR with several commits.
         Sends an event about opened PR."""
         self.github = github
@@ -559,6 +559,7 @@ class FakeGithubPullRequest(object):
         self.project = project
         self.branch = branch
         self.subject = subject
+        self.body = body
         self.number_of_commits = 0
         self.upstream_root = upstream_root
         self.files = []
@@ -574,6 +575,15 @@ class FakeGithubPullRequest(object):
         self._createPRRef()
         self._addCommitToRepo(files=files)
         self._updateTimeStamp()
+        self.url = 'https://github.com' + self.project + '/pulls/%s' % self.number
+        self.pr_link = '%s#%s' % (self.project, self.number)
+
+    def setMerged(self):
+        self.is_merged = True
+
+    def setDependsOn(self, other):
+        self.setBody(
+            '%s\n\nDepends-On: %s\n' % (self.subject, other.pr_link))
 
     def addCommit(self, files=[]):
         """Adds a commit on top of the actual PR head."""
@@ -863,6 +873,9 @@ class FakeGithubPullRequest(object):
         }
         return (name, data)
 
+    def setBody(self, body):
+        self.body = body
+
 
 class FakeGithubConnection(githubconnection.GithubConnection):
     log = logging.getLogger("zuul.test.FakeGithubConnection")
@@ -926,10 +939,17 @@ class FakeGithubConnection(githubconnection.GithubConnection):
     def getPull(self, project, number):
         pr = self._getPull(project, number)
 
+        # github3 returns NullObjects instead of raising 404s
+        if not pr:
+            return None
+
         data = {
             'number': number,
             'title': pr.subject,
+            'body': pr.body,
             'updated_at': pr.updated_at,
+            'url': pr.url,
+            'merged': pr.is_merged,
             'base': {
                 'repo': {
                     'full_name': pr.project
