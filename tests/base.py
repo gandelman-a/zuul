@@ -69,6 +69,7 @@ import zuul.lib.connections
 import zuul.merger.client
 import zuul.merger.merger
 import zuul.merger.server
+import zuul.model
 import zuul.nodepool
 import zuul.zk
 from zuul.exceptions import MergeFailure
@@ -871,18 +872,19 @@ class FakeGithubConnection(githubconnection.GithubConnection):
         super(FakeGithubConnection, self).__init__(driver, connection_name,
                                                    connection_config)
         self.connection_name = connection_name
-        self.pr_number = 0
-        self.pull_requests = []
+        self.pull_requests = {}
         self.upstream_root = upstream_root
         self.merge_failure = False
         self.merge_not_allowed_count = 0
 
     def openFakePullRequest(self, project, branch, subject, files=[]):
-        self.pr_number += 1
+        if project not in self.pull_requests:
+            self.pull_requests[project] = []
+        pr_number = len(self.pull_requests[project]) + 1
         pull_request = FakeGithubPullRequest(
-            self, self.pr_number, project, branch, subject, self.upstream_root,
+            self, pr_number, project, branch, subject, self.upstream_root,
             files=files)
-        self.pull_requests.append(pull_request)
+        self.pull_requests[project].append(pull_request)
         return pull_request
 
     def getPushEvent(self, project, ref, old_rev=None, new_rev=None):
@@ -913,8 +915,17 @@ class FakeGithubConnection(githubconnection.GithubConnection):
             data=payload, headers=headers)
         urllib.request.urlopen(req)
 
+    def _getPull(self, project, number):
+        if isinstance(project, zuul.model.Project):
+            project = project.name
+        try:
+            return self.pull_requests[project][number - 1]
+        except (IndexError, KeyError):
+            return None
+
     def getPull(self, project, number):
-        pr = self.pull_requests[number - 1]
+        pr = self._getPull(project, number)
+
         data = {
             'number': number,
             'title': pr.subject,
@@ -936,19 +947,20 @@ class FakeGithubConnection(githubconnection.GithubConnection):
         return data
 
     def getPullBySha(self, sha):
-        prs = list(set([p for p in self.pull_requests if sha == p.head_sha]))
+        prs = []
+        for project, pull_requests in self.pull_requets.keys():
+            prs.extend([p for p in pull_requests if p.head_sha == sha])
         if len(prs) > 1:
             raise Exception('Multiple pulls found with head sha: %s' % sha)
         pr = prs[0]
-        return self.getPull(pr.project, pr.number)
+        return self._getPull(pr.project, pr.number)
 
     def getPullFileNames(self, project, number):
-        pr = self.pull_requests[number - 1]
-        return pr.files
+        return self._getPull(project, number).files
 
     def _getPullReviews(self, owner, project, number):
-        pr = self.pull_requests[number - 1]
-        return pr.reviews
+        proj = '%s/%s' % (owner, project)
+        return self._getPull(proj, number).reviews
 
     def getUser(self, login):
         data = {
@@ -960,7 +972,7 @@ class FakeGithubConnection(githubconnection.GithubConnection):
 
     def getRepoPermission(self, project, login):
         owner, proj = project.split('/')
-        for pr in self.pull_requests:
+        for pr in self.pull_requests[project]:
             pr_owner, pr_project = pr.project.split('/')
             if (pr_owner == owner and proj == pr_project):
                 if login in pr.writers:
@@ -981,11 +993,10 @@ class FakeGithubConnection(githubconnection.GithubConnection):
         return ['master']
 
     def commentPull(self, project, pr_number, message):
-        pull_request = self.pull_requests[pr_number - 1]
-        pull_request.addComment(message)
+        self._getPull(project, pr_number).addComment(message)
 
     def mergePull(self, project, pr_number, commit_message='', sha=None):
-        pull_request = self.pull_requests[pr_number - 1]
+        pull_request = self._getPull(project, pr_number)
         if self.merge_failure:
             raise Exception('Pull request was not merged')
         if self.merge_not_allowed_count > 0:
@@ -997,7 +1008,7 @@ class FakeGithubConnection(githubconnection.GithubConnection):
 
     def getCommitStatuses(self, project, sha):
         owner, proj = project.split('/')
-        for pr in self.pull_requests:
+        for pr in self.pull_requests[project]:
             pr_owner, pr_project = pr.project.split('/')
             if (pr_owner == owner and pr_project == proj and
                 pr.head_sha == sha):
@@ -1006,19 +1017,17 @@ class FakeGithubConnection(githubconnection.GithubConnection):
     def setCommitStatus(self, project, sha, state,
                         url='', description='', context=''):
         owner, proj = project.split('/')
-        for pr in self.pull_requests:
+        for pr in self.pull_requests[project]:
             pr_owner, pr_project = pr.project.split('/')
             if (pr_owner == owner and pr_project == proj and
                 pr.head_sha == sha):
                 pr.setStatus(sha, state, url, description, context)
 
     def labelPull(self, project, pr_number, label):
-        pull_request = self.pull_requests[pr_number - 1]
-        pull_request.addLabel(label)
+        self._getPull(project, pr_number).addLabel(label)
 
     def unlabelPull(self, project, pr_number, label):
-        pull_request = self.pull_requests[pr_number - 1]
-        pull_request.removeLabel(label)
+        self._getPull(project, pr_number).removeLabel(label)
 
 
 class BuildHistory(object):
